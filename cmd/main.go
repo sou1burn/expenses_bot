@@ -10,6 +10,7 @@ import (
 	"expences_bot/internal/repository"
 	"expences_bot/web"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -42,7 +43,14 @@ func main() {
 	mux := http.NewServeMux()
 	handler.NewHandler(repo).Register(mux)
 	mux.Handle("GET /", web.Handler())
-	srv := &http.Server{Addr: ":" + cfg.HttpPort, Handler: mux}
+	srv := &http.Server{
+		Addr:              net.JoinHostPort(cfg.HttpHost, cfg.HttpPort),
+		Handler:           http.NewCrossOriginProtection().Handler(mux), // CSRF: чужие сайты не могут менять траты
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 	go func() {
 		slog.Info("admin panel", "addr", srv.Addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

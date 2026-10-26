@@ -26,6 +26,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/expenses/{id}", h.Delete)
 }
 
+const maxBodyBytes = 64 << 10
+
 type expenseBody struct {
 	UserID   int64   `json:"user_id"`
 	Amount   float64 `json:"amount"`
@@ -65,6 +67,7 @@ func pathID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 
 func decodeBody(w http.ResponseWriter, r *http.Request) (expenseBody, bool) {
 	var b expenseBody
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
 		http.Error(w, "incorrect JSON: "+err.Error(), http.StatusBadRequest)
 		return b, false
