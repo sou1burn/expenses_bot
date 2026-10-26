@@ -14,6 +14,7 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -27,15 +28,17 @@ func NewPostgresRepo(db *sql.DB) *Repo {
 	}
 }
 
-func NewPostgresDB(cfg config.Config) (*sql.DB, error) {
-	u := url.URL{
-		User:     url.UserPassword(cfg.DbUser, cfg.DbPassword),
+func dbURL(cfg config.Config, user, password, dbName string) url.URL {
+	return url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(user, password),
 		Host:     cfg.DbHost + ":" + cfg.DbPort,
-		Path:     cfg.DbName,
+		Path:     dbName,
 		RawQuery: "sslmode=disable",
 	}
+}
 
-	u.Scheme = "postgres"
+func connect(u url.URL) (*sql.DB, error) {
 	db, err := sql.Open("pgx", u.String())
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
@@ -44,7 +47,8 @@ func NewPostgresDB(cfg config.Config) (*sql.DB, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		err = db.PingContext(ctx)
 		cancel()
-		if err == nil {
+		var pgErr *pgconn.PgError
+		if err == nil || errors.As(err, &pgErr) && pgErr.Code[:2] == "28" {
 			break
 		}
 		slog.Warn("database not ready", "attempt", i+1, "err", err)
@@ -52,7 +56,16 @@ func NewPostgresDB(cfg config.Config) (*sql.DB, error) {
 	}
 	if err != nil {
 		db.Close()
-		return nil, fmt.Errorf("connect db: %w", err)
+		return nil, fmt.Errorf("connect db as %s: %w", u.User.Username(), err)
+	}
+	return db, nil
+}
+
+func NewPostgresDB(cfg config.Config) (*sql.DB, error) {
+	u := dbURL(cfg, cfg.DbUser, cfg.DbPassword, cfg.DbName)
+	db, err := connect(u)
+	if err != nil {
+		return nil, err
 	}
 	slog.Info("connected to PostgreSQL")
 
