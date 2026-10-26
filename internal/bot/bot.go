@@ -35,7 +35,8 @@ func New(token string, repo *repository.Repo, ag *agent.Agent) *Bot {
 type message struct {
 	Text string `json:"text"`
 	Chat struct {
-		ID int64 `json:"id"`
+		ID   int64  `json:"id"`
+		Type string `json:"type"`
 	} `json:"chat"`
 	From struct {
 		ID int64 `json:"id"`
@@ -59,9 +60,11 @@ func (b *Bot) Run(ctx context.Context) {
 		}
 		for _, u := range updates {
 			offset = u.UpdateID + 1
-			if u.Message != nil && u.Message.Text != "" {
-				b.send(ctx, u.Message.Chat.ID, b.reply(ctx, u.Message.From.ID, u.Message.Text))
+			m := u.Message
+			if m == nil || m.Text == "" || m.Chat.Type != "private" {
+				continue
 			}
+			b.send(ctx, m.Chat.ID, b.reply(ctx, m.From.ID, m.Text))
 		}
 	}
 }
