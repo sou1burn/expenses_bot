@@ -19,6 +19,7 @@ type Config struct {
 	LlmBaseUrl      string
 	LlmModel        string
 	BotToken        string
+	HttpHost        string
 	HttpPort        string
 }
 
@@ -45,6 +46,7 @@ func LoadConfig(fileName string) *Config {
 		LlmBaseUrl:      getenv("LLM_BASE_URL", "https://openrouter.ai/api/v1"),
 		LlmModel:        getenv("LLM_MODEL", "auto"),
 		BotToken:        getenv("BOT_TOKEN", ""),
+		HttpHost:        getenv("HTTP_HOST", "127.0.0.1"),
 		HttpPort:        getenv("HTTP_PORT", "8080"),
 	}
 	for k, v := range map[string]string{"DB_PASSWORD": cfg.DbPassword, "LLM_API_KEY": cfg.LlmApiKey, "BOT_TOKEN": cfg.BotToken} {
