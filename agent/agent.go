@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -46,27 +48,42 @@ type Intent struct {
 type Config struct {
 	BaseURL string
 	APIKey  string
-	Model   string
+	// Model — одна модель или несколько через запятую, либо "auto" (см. ResolveModels).
+	// Несколько уходят в OpenRouter полем "models": если первая бесплатная модель
+	// перегружена или упала, OpenRouter сам пробует следующую.
+	Model string
 }
 
+// ErrUnavailable — модели временно не отвечают: лимит запросов (429) или сбой провайдера (5xx).
+var ErrUnavailable = errors.New("llm temporarily unavailable")
+
 type Agent struct {
-	cfg  Config
-	http *http.Client
-	now  func() time.Time
+	cfg        Config
+	models     []string
+	http       *http.Client
+	now        func() time.Time
+	retryDelay time.Duration
 }
 
 func New(cfg Config) *Agent {
-	return &Agent{cfg: cfg, http: &http.Client{Timeout: 30 * time.Second}, now: time.Now}
+	return &Agent{
+		cfg:        cfg,
+		models:     splitModels(cfg.Model),
+		http:       &http.Client{Timeout: 30 * time.Second},
+		now:        time.Now,
+		retryDelay: 2 * time.Second,
+	}
 }
 
-const systemPrompt = `Ты разбираешь сообщения для бота учёта расходов. Сегодня %s (%s).
+const systemPrompt = `
+Ты разбираешь сообщения для бота учёта расходов. Сегодня %s (%s). Вчера %s. Начало месяца %s. Неделю назад %s.
 Верни ТОЛЬКО JSON-объект без пояснений с полями:
 action: "add" | "list" | "update" | "delete" | "unknown"
 amount: число (рубли)
 category: одна из [%s]
 spent_at: дата траты YYYY-MM-DD (по умолчанию сегодня; "вчера", "в пятницу" считай от сегодняшней даты)
 comment: на что потрачено, коротко ("кофе", "такси")
-from, to: период для list, YYYY-MM-DD включительно ("в этом месяце" = с 1 числа по сегодня, "за неделю" = последние 7 дней)
+from, to: период для list, YYYY-MM-DD включительно. Если в сообщении есть период, from и to обязательны: "в этом месяце" = с начала месяца по сегодня, "за неделю" = с недели назад по сегодня, "вчера" = вчера по вчера
 target_last: true, если речь о последней трате
 target_text: слово для поиска траты при update/delete ("удали такси" -> "такси")
 reply: для unknown — короткий ответ пользователю на русском
@@ -75,41 +92,79 @@ reply: для unknown — короткий ответ пользователю �
 Примеры:
 "кофе 350" -> {"action":"add","amount":350,"category":"еда","comment":"кофе"}
 "такси 1200 вчера" -> {"action":"add","amount":1200,"category":"транспорт","comment":"такси","spent_at":"<вчера>"}
-"сколько потратил на еду в этом месяце" -> {"action":"list","category":"еда","from":"<1 число>","to":"<сегодня>"}
+"сколько потратил на еду в этом месяце" -> {"action":"list","category":"еда","from":"<начало месяца>","to":"<сегодня>"}
 "последнее было не 350, а 450" -> {"action":"update","target_last":true,"amount":450}
 "удали такси" -> {"action":"delete","target_text":"такси"}
 "привет" -> {"action":"unknown","reply":"Напиши трату, например: кофе 350"}`
 
 func (a *Agent) Parse(ctx context.Context, text string) (Intent, error) {
 	now := a.now()
-	prompt := fmt.Sprintf(systemPrompt, now.Format(time.DateOnly), now.Weekday(), strings.Join(Categories, ", "))
+	day := func(t time.Time) string { return t.Format(time.DateOnly) }
+	prompt := fmt.Sprintf(systemPrompt, day(now), now.Weekday(), day(now.AddDate(0, 0, -1)),
+		day(time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())), day(now.AddDate(0, 0, -6)),
+		strings.Join(Categories, ", "))
 
-	body, _ := json.Marshal(map[string]any{
-		"model":           a.cfg.Model,
+	models := a.models[:min(len(a.models), maxModels)]
+	if len(models) == 0 {
+		return Intent{}, errors.New("no llm models: set LLM_MODEL or call ResolveModels")
+	}
+	req := map[string]any{
+		"model":           models[0],
 		"temperature":     0,
 		"response_format": map[string]string{"type": "json_object"},
 		"messages": []map[string]string{
 			{"role": "system", "content": prompt},
 			{"role": "user", "content": text},
 		},
-	})
+	}
+	if len(models) > 1 {
+		req["models"] = models
+	}
+	body, _ := json.Marshal(req)
+
+	for attempt := 1; ; attempt++ {
+		content, err := a.complete(ctx, body)
+		if err == nil {
+			in, perr := parseIntent(content, now)
+			if perr == nil {
+				return in, nil
+			}
+			err = fmt.Errorf("%w: %v", ErrUnavailable, perr)
+		}
+		if !errors.Is(err, ErrUnavailable) || attempt == 3 {
+			return Intent{}, err
+		}
+		slog.Warn("llm unavailable, retrying", "attempt", attempt, "err", err)
+		select {
+		case <-ctx.Done():
+			return Intent{}, ctx.Err()
+		case <-time.After(time.Duration(attempt) * a.retryDelay):
+		}
+	}
+}
+
+func (a *Agent) complete(ctx context.Context, body []byte) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(a.cfg.BaseURL, "/")+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return Intent{}, err
+		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Title", "Expenses Bot")
 	if a.cfg.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+a.cfg.APIKey)
 	}
 
 	resp, err := a.http.Do(req)
 	if err != nil {
-		return Intent{}, fmt.Errorf("llm request: %w", err)
+		return "", fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+		return "", fmt.Errorf("%w: status %d: %.300s", ErrUnavailable, resp.StatusCode, raw)
+	}
 	if resp.StatusCode != http.StatusOK {
-		return Intent{}, fmt.Errorf("llm status %d: %.300s", resp.StatusCode, raw)
+		return "", fmt.Errorf("llm status %d: %.300s", resp.StatusCode, raw)
 	}
 
 	var out struct {
@@ -120,9 +175,12 @@ func (a *Agent) Parse(ctx context.Context, text string) (Intent, error) {
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil || len(out.Choices) == 0 {
-		return Intent{}, fmt.Errorf("llm bad response: %.300s", raw)
+		return "", fmt.Errorf("%w: bad response: %.300s", ErrUnavailable, raw)
 	}
-	return parseIntent(out.Choices[0].Message.Content, now)
+	if strings.TrimSpace(out.Choices[0].Message.Content) == "" {
+		return "", fmt.Errorf("%w: empty answer", ErrUnavailable)
+	}
+	return out.Choices[0].Message.Content, nil
 }
 
 func parseIntent(content string, now time.Time) (Intent, error) {

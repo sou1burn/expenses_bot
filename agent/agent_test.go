@@ -2,8 +2,10 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -32,5 +34,61 @@ func TestParse(t *testing.T) {
 
 	if in, _ := parseIntent(`{"action":"add"}`, time.Now()); in.Action != Unknown {
 		t.Fatalf("add without amount must be unknown, got %+v", in)
+	}
+}
+
+func TestResolveModels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":[
+			{"id":"acme/new:free","created":300,"context_length":128000,"supported_parameters":["response_format"]},
+			{"id":"google/gemma:free","created":100,"context_length":128000,"supported_parameters":["response_format"]},
+			{"id":"google/no-json:free","created":400,"context_length":128000,"supported_parameters":["tools"]},
+			{"id":"nvidia/safety:free","created":500,"context_length":128000,"supported_parameters":["response_format"]},
+			{"id":"qwen/tiny:free","created":500,"context_length":8000,"supported_parameters":["response_format"]},
+			{"id":"openai/paid","created":500,"context_length":128000,"supported_parameters":["response_format"]},
+			{"id":"qwen/big:free","created":200,"context_length":128000,"supported_parameters":["response_format"]},
+			{"id":"openrouter/free","created":1,"context_length":128000,"supported_parameters":["response_format"]}
+		]}`))
+	}))
+	defer srv.Close()
+
+	a := New(Config{BaseURL: srv.URL, Model: "openai/paid, gone/model:free"})
+	if err := a.ResolveModels(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// явная модель сохранена, пропавшая выкинута, остальное — бесплатные с JSON, предпочтительные вендоры первыми
+	if got := strings.Join(a.models, ","); got != "openai/paid,google/gemma:free,qwen/big:free" {
+		t.Fatalf("models = %s", got)
+	}
+
+	a = New(Config{BaseURL: srv.URL, Model: "auto"})
+	a.ResolveModels(context.Background())
+	if got := strings.Join(a.models, ","); got != "google/gemma:free,qwen/big:free,acme/new:free" {
+		t.Fatalf("auto models = %s", got)
+	}
+}
+
+func TestParseRetriesUnavailable(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls < 3 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.Write([]byte(`{"choices":[{"message":{"content":"{\"action\":\"delete\",\"target_text\":\"такси\"}"}}]}`))
+	}))
+	defer srv.Close()
+
+	a := New(Config{BaseURL: srv.URL, Model: "m"})
+	a.retryDelay = 0
+	in, err := a.Parse(context.Background(), "удали такси")
+	if err != nil || in.Action != Delete || calls != 3 {
+		t.Fatalf("calls=%d err=%v in=%+v", calls, err, in)
+	}
+
+	calls = -10 // всегда 502
+	if _, err := a.Parse(context.Background(), "x"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("want ErrUnavailable, got %v", err)
 	}
 }
