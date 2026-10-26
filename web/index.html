@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Семейные расходы</title>
+<style>
+  :root {
+    --bg: #0e0e10;
+    --surface: #161618;
+    --surface-2: #1d1d20;
+    --hover: #232327;
+    --border: #2a2a2e;
+    --text: #ececef;
+    --muted: #8a8a93;
+    --faint: #5c5c64;
+    --primary: #e4e4e7;
+    --primary-text: #111113;
+    --danger: #f26d6d;
+    --radius: 12px;
+    --c-еда: #c9a86a;
+    --c-транспорт: #7d9cc4;
+    --c-жильё: #a58bc2;
+    --c-развлечения: #c4849b;
+    --c-здоровье: #7fb59a;
+    --c-покупки: #c79478;
+    --c-другое: #8a8a93;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 32px 16px 64px; }
+
+  header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 24px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+  .sub { color: var(--muted); margin-top: 2px; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px; }
+  .stat { padding: 16px 18px; }
+  .stat .label { color: var(--muted); font-size: 12px; }
+  .stat .value { font-size: 22px; font-weight: 600; margin-top: 4px; font-variant-numeric: tabular-nums; }
+
+  .breakdown { padding: 16px 18px; margin-bottom: 12px; }
+  .bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--surface-2); }
+  .bar span { height: 100%; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 12px; font-size: 13px; }
+  .legend span { color: var(--muted); }
+  .legend b { font-weight: 500; color: var(--text); font-variant-numeric: tabular-nums; }
+
+  .filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; padding: 14px 16px; margin-bottom: 12px; }
+  .filters label { flex: 1 1 150px; }
+  .presets { display: flex; gap: 4px; }
+
+  label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); }
+  input, select {
+    font: inherit; color: var(--text); background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; height: 36px; width: 100%;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--faint); }
+  input::-webkit-calendar-picker-indicator { filter: invert(.6); }
+
+  button {
+    font: inherit; font-weight: 500; cursor: pointer; height: 36px; padding: 0 14px;
+    border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+  }
+  button:hover { background: var(--hover); }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--faint); outline-offset: 1px; }
+  button.primary { background: var(--primary); color: var(--primary-text); border-color: var(--primary); }
+  button.primary:hover { background: #fff; }
+  button.danger { background: transparent; color: var(--danger); border-color: #4a2a2c; }
+  button.danger:hover { background: #2a1b1c; }
+  button.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+  button.ghost:hover { background: var(--hover); color: var(--text); }
+  button.ghost.on { background: var(--hover); color: var(--text); }
+  .icon { width: 32px; height: 32px; padding: 0; display: inline-grid; place-items: center; }
+  .icon svg { width: 16px; height: 16px; }
+
+  .table-card { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; min-width: 640px; }
+  th {
+    text-align: left; font-weight: 500; font-size: 12px; color: var(--muted);
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+  }
+  td { padding: 10px 16px; border-bottom: 1px solid var(--border); }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--surface-2); }
+  .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .muted { color: var(--muted); }
+  .actions { text-align: right; white-space: nowrap; width: 1%; }
+  .actions button { opacity: .5; }
+  tr:hover .actions button, .actions button:focus-visible { opacity: 1; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px 2px 8px; border-radius: 999px; background: var(--surface-2); font-size: 13px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .empty { text-align: center; color: var(--muted); padding: 48px 16px; }
+
+  dialog {
+    background: var(--surface); color: var(--text); border: 1px solid var(--border);
+    border-radius: 16px; padding: 24px; width: min(440px, calc(100vw - 32px));
+  }
+  dialog::backdrop { background: rgb(0 0 0 / .6); backdrop-filter: blur(2px); }
+  dialog h2 { font-size: 17px; font-weight: 600; margin: 0 0 18px; }
+  dialog form { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  dialog .full { grid-column: 1 / -1; }
+  dialog .buttons { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+  dialog p { color: var(--muted); margin: 0 0 18px; }
+
+  #toast {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(12px);
+    background: #2a1b1c; color: #f6b3b3; border: 1px solid #4a2a2c; border-radius: 10px;
+    padding: 10px 16px; opacity: 0; pointer-events: none; transition: .2s; max-width: calc(100vw - 32px);
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%); }
+
+  @media (max-width: 720px) {
+    .wrap { padding-top: 20px; }
+    .stats { grid-template-columns: 1fr 1fr; }
+    .presets { width: 100%; }
+    .presets button { flex: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) { #toast { transition: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Семейные расходы</h1>
+      <div class="sub" id="period-label">За всё время</div>
+    </div>
+    <button class="primary" id="add">+ Новая трата</button>
+  </header>
+
+  <section class="stats">
+    <div class="card stat"><div class="label">Потрачено</div><div class="value" id="s-total">—</div></div>
+    <div class="card stat"><div class="label">Трат</div><div class="value" id="s-count">—</div></div>
+    <div class="card stat"><div class="label">Средняя трата</div><div class="value" id="s-avg">—</div></div>
+    <div class="card stat"><div class="label">Членов семьи</div><div class="value" id="s-members">—</div></div>
+  </section>
+
+  <section class="card breakdown">
+    <div class="bar" id="bar"></div>
+    <div class="legend" id="legend"></div>
+  </section>
+
+  <form class="card filters" id="filter">
+    <label>Член семьи<input name="user_id" list="members" placeholder="Все" inputmode="numeric"></label>
+    <label>Категория<select name="category"><option value="">Все</option></select></label>
+    <label>С<input name="from" type="date"></label>
+    <label>По<input name="to" type="date"></label>
+    <div class="presets">
+      <button type="button" class="ghost" data-preset="week">Неделя</button>
+      <button type="button" class="ghost" data-preset="month">Месяц</button>
+      <button type="button" class="ghost" data-preset="all">Всё</button>
+    </div>
+  </form>
+
+  <section class="card table-card">
+    <table>
+      <thead><tr><th>Дата</th><th>Член семьи</th><th>Категория</th><th>Комментарий</th><th class="num">Сумма</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="empty" id="empty" hidden>Трат не найдено</div>
+  </section>
+</div>
+
+<datalist id="members"></datalist>
+
+<dialog id="edit-dlg">
+  <h2 id="edit-title">Новая трата</h2>
+  <form id="edit" method="dialog">
+    <input type="hidden" name="id">
+    <label>Сумма, ₽<input name="amount" type="number" step="0.01" min="0.01" required autofocus></label>
+    <label>Дата<input name="spent_at" type="date" required></label>
+    <label>Категория<select name="category" required></select></label>
+    <label>Telegram ID<input name="user_id" list="members" required inputmode="numeric" pattern="\d+"></label>
+    <label class="full">Комментарий<input name="comment" placeholder="Необязательно"></label>
+    <div class="buttons">
+      <button type="button" class="ghost" data-close>Отмена</button>
+      <button class="primary" id="save">Добавить</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="del-dlg">
+  <h2>Удалить трату?</h2>
+  <p id="del-text"></p>
+  <div class="buttons" style="display:flex;justify-content:flex-end;gap:8px">
+    <button type="button" class="ghost" data-close>Отмена</button>
+    <button type="button" class="danger" id="del-ok">Удалить</button>
+  </div>
+</dialog>
+
+<div id="toast" role="alert"></div>
+
+<script>
+// REST-контракт, который ждёт панель:
+//   GET    /api/expenses?user_id=&from=&to=&category=  -> [expense]
+//   POST   /api/expenses        {user_id, amount, category, spent_at, comment} -> expense
+//   PUT    /api/expenses/{id}   то же тело -> expense
+//   DELETE /api/expenses/{id}   -> 204
+const API = '/api/expenses';
+const CATEGORIES = ['еда', 'транспорт', 'жильё', 'развлечения', 'здоровье', 'покупки', 'другое'];
+const $ = s => document.querySelector(s);
+const filter = $('#filter'), edit = $('#edit'), editDlg = $('#edit-dlg'), delDlg = $('#del-dlg');
+const members = new Set();
+const money = new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 2 });
+const dateFmt = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' });
+const color = c => `var(--c-${CATEGORIES.includes(c) ? c : 'другое'})`;
+const iso = d => d.toLocaleDateString('sv'); // YYYY-MM-DD в локальном времени
+const ICON_EDIT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+const ICON_DEL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg>';
+let items = [];
+
+for (const sel of document.querySelectorAll('select[name=category]'))
+  for (const c of CATEGORIES) sel.add(new Option(c[0].toUpperCase() + c.slice(1), c));
+
+function toast(msg) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => t.classList.remove('show'), 4000);
+}
+
+async function api(method, url, body) {
+  const r = await fetch(url, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : {},
+    body: body && JSON.stringify(body),
+  }).catch(() => null);
+  if (!r || !r.ok) {
+    const msg = r ? `Ошибка ${r.status}: ${(await r.text()).slice(0, 200)}` : 'Сервер недоступен';
+    toast(msg);
+    throw new Error(msg);
+  }
+  return r.status === 204 ? null : r.json();
+}
+
+async function load() {
+  const q = new URLSearchParams([...new FormData(filter)].filter(([, v]) => v));
+  items = (await api('GET', `${API}?${q}`)) || [];
+  render();
+}
+
+function render() {
+  const tbody = $('#rows');
+  tbody.replaceChildren();
+  const byCat = {}, users = new Set();
+  let total = 0;
+
+  for (const e of items) {
+    const amount = Number(e.amount);
+    total += amount;
+    byCat[e.category] = (byCat[e.category] || 0) + amount;
+    users.add(String(e.user_id));
+    members.add(String(e.user_id));
+
+    // textContent, не innerHTML: комментарии пишут пользователи бота
+    const tr = tbody.insertRow();
+    tr.insertCell().textContent = dateFmt.format(new Date(e.spent_at.slice(0, 10) + 'T00:00'));
+    const who = tr.insertCell();
+    who.textContent = e.user_id;
+    who.className = 'muted';
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.innerHTML = `<span class="dot" style="background:${color(e.category)}"></span>`;
+    chip.append(e.category);
+    tr.insertCell().append(chip);
+    const comment = tr.insertCell();
+    comment.textContent = e.comment || '—';
+    if (!e.comment) comment.className = 'muted';
+    const sum = tr.insertCell();
+    sum.textContent = money.format(amount);
+    sum.className = 'num';
+    const act = tr.insertCell();
+    act.className = 'actions';
+    act.append(iconBtn(ICON_EDIT, 'Изменить', () => openEdit(e)), iconBtn(ICON_DEL, 'Удалить', () => openDelete(e)));
+  }
+
+  $('#empty').hidden = items.length > 0;
+  $('#s-total').textContent = money.format(total);
+  $('#s-count').textContent = items.length;
+  $('#s-avg').textContent = items.length ? money.format(total / items.length) : '—';
+  $('#s-members').textContent = users.size;
+  $('#members').replaceChildren(...[...members].map(m => new Option(m)));
+
+  const cats = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
+  $('#bar').replaceChildren(...cats.map(([c, v]) => {
+    const s = document.createElement('span');
+    s.style.cssText = `width:${v / total * 100}%;background:${color(c)}`;
+    s.title = `${c}: ${money.format(v)}`;
+    return s;
+  }));
+  $('#legend').replaceChildren(...(cats.length ? cats : [['нет данных', 0]]).map(([c, v]) => {
+    const el = document.createElement('div');
+    el.className = 'chip';
+    el.style.background = 'none';
+    el.innerHTML = `<span class="dot" style="background:${color(c)}"></span><span></span><b></b>`;
+    el.children[1].textContent = c;
+    el.children[2].textContent = cats.length ? `${money.format(v)} · ${Math.round(v / total * 100)}%` : '';
+    return el;
+  }));
+
+  const { from, to } = filter;
+  $('#period-label').textContent =
+    from.value || to.value
+      ? `${from.value ? dateFmt.format(new Date(from.value + 'T00:00')) : '…'} — ${to.value ? dateFmt.format(new Date(to.value + 'T00:00')) : 'сегодня'}`
+      : 'За всё время';
+}
+
+function iconBtn(svg, label, onclick) {
+  const b = document.createElement('button');
+  b.className = 'ghost icon';
+  b.innerHTML = svg;
+  b.title = label;
+  b.setAttribute('aria-label', label);
+  b.onclick = onclick;
+  return b;
+}
+
+function openEdit(e) {
+  edit.reset();
+  edit.id.value = e?.id ?? '';
+  edit.amount.value = e?.amount ?? '';
+  edit.spent_at.value = e ? e.spent_at.slice(0, 10) : iso(new Date());
+  edit.category.value = e?.category ?? 'еда';
+  edit.user_id.value = e?.user_id ?? filter.user_id.value;
+  edit.comment.value = e?.comment ?? '';
+  $('#edit-title').textContent = e ? 'Изменить трату' : 'Новая трата';
+  $('#save').textContent = e ? 'Сохранить' : 'Добавить';
+  editDlg.showModal();
+}
+
+edit.onsubmit = async ev => {
+  ev.preventDefault();
+  const body = {
+    user_id: Number(edit.user_id.value),
+    amount: Number(edit.amount.value),
+    category: edit.category.value,
+    spent_at: edit.spent_at.value,
+    comment: edit.comment.value.trim() || null,
+  };
+  const id = edit.id.value;
+  await (id ? api('PUT', `${API}/${id}`, body) : api('POST', API, body));
+  editDlg.close();
+  load();
+};
+
+let toDelete = null;
+function openDelete(e) {
+  toDelete = e;
+  $('#del-text').textContent = `${e.comment || e.category} — ${money.format(Number(e.amount))}, ${dateFmt.format(new Date(e.spent_at.slice(0, 10) + 'T00:00'))}`;
+  delDlg.showModal();
+}
+$('#del-ok').onclick = async () => {
+  await api('DELETE', `${API}/${toDelete.id}`);
+  delDlg.close();
+  load();
+};
+
+for (const b of document.querySelectorAll('[data-close]')) b.onclick = () => b.closest('dialog').close();
+for (const d of [editDlg, delDlg]) d.onclick = ev => { if (ev.target === d) d.close(); }; // клик по фону
+
+function setPreset(p) {
+  const now = new Date();
+  filter.from.value = p === 'week' ? iso(new Date(now - 6 * 864e5))
+                    : p === 'month' ? iso(new Date(now.getFullYear(), now.getMonth(), 1)) : '';
+  filter.to.value = p === 'all' ? '' : iso(now);
+  for (const b of filter.querySelectorAll('[data-preset]')) b.classList.toggle('on', b.dataset.preset === p);
+  load();
+}
+for (const b of filter.querySelectorAll('[data-preset]')) b.onclick = () => setPreset(b.dataset.preset);
+
+filter.onsubmit = ev => { ev.preventDefault(); load(); };
+filter.onchange = ev => {
+  if (ev.target.type === 'date') for (const b of filter.querySelectorAll('[data-preset]')) b.classList.remove('on');
+  load();
+};
+$('#add').onclick = () => openEdit(null);
+
+setPreset('month');
+</script>
+</body>
+</html>
